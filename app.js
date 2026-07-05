@@ -12,6 +12,7 @@ const seedData = {
   sessions: [],
   tasks: [],
   messages: [],
+  updates: [],
 };
 
 let data = structuredClone(seedData);
@@ -33,6 +34,7 @@ function normalizeData(value) {
     sessions: value.sessions || [],
     tasks: value.tasks || [],
     messages: value.messages || [],
+    updates: value.updates || [],
   };
 }
 
@@ -175,6 +177,17 @@ function readImageFile(file, callback) {
   if (!file || !file.type.startsWith("image/")) return;
   const reader = new FileReader();
   reader.addEventListener("load", () => callback(reader.result));
+  reader.readAsDataURL(file);
+}
+
+function readMediaFile(file, callback) {
+  if (!file || (!file.type.startsWith("image/") && !file.type.startsWith("video/"))) return;
+  const reader = new FileReader();
+  reader.addEventListener("load", () => callback({
+    data: reader.result,
+    type: file.type.startsWith("video/") ? "video" : "image",
+    name: file.name,
+  }));
   reader.readAsDataURL(file);
 }
 
@@ -516,6 +529,7 @@ function renderApp() {
     ["requests", "Requests"],
     ["sessions", "Sessions"],
     ["progress", "Progress"],
+    ["updates", "Updates"],
     ["chat", "Chat"],
     ["settings", "Settings"],
   ];
@@ -574,6 +588,7 @@ function renderApp() {
     requests: renderRequests,
     sessions: renderSessions,
     progress: renderProgress,
+    updates: renderUpdates,
     chat: renderChat,
     settings: renderSettings,
   };
@@ -827,6 +842,7 @@ function viewHeader() {
     requests: ["Mentorship Requests", "Track student requests and approval status."],
     sessions: ["Sessions", "Plan mentor meetings and project guidance calls."],
     progress: ["Progress Tracker", "Break learning goals into practical tasks."],
+    updates: ["Mentor Updates", currentUser.role === "mentor" ? "Post recruitment news, deadlines, resources, and student announcements." : "Read mentor announcements, react, and discuss updates."],
     chat: ["Mentor Chat", "Discuss goals, doubts, and next steps."],
     settings: ["Profile Settings", "Manage your public profile, photos, contact links, and preferences."],
   };
@@ -1214,6 +1230,210 @@ function taskItem(task) {
         <p>${task.done ? "Completed" : "In progress"}</p>
       </div>
     </article>
+  `;
+}
+
+function sortedUpdates() {
+  return data.updates.slice().sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+}
+
+function renderUpdates() {
+  document.getElementById("view").innerHTML = `
+    <div class="updates-layout">
+      ${currentUser.role === "mentor" ? `
+        <section class="panel">
+          <div class="section-title">
+            <h3>Post an update</h3>
+            <span class="role-pill">Mentor only</span>
+          </div>
+          <form class="form two-col" id="updateForm">
+            <label>Update type<select name="category" required>
+              <option value="Recruitment">Recruitment</option>
+              <option value="Internship">Internship</option>
+              <option value="Workshop">Workshop</option>
+              <option value="Deadline">Deadline</option>
+              <option value="General">General</option>
+            </select></label>
+            <label>Related link<input name="link" type="url" placeholder="https://company.com/careers" /></label>
+            <label class="wide">Title<input name="title" placeholder="Frontend internship drive opens Monday" required /></label>
+            <label class="wide">Details<textarea name="body" rows="5" placeholder="Share eligibility, deadline, how to apply, and preparation tips." required></textarea></label>
+            <fieldset class="media-field wide">
+              <legend>Photo or video from gallery</legend>
+              <div class="media-picker">
+                <div class="media-preview" data-update-media-preview>No media selected</div>
+                <div class="media-actions">
+                  <input name="mediaData" type="hidden" />
+                  <input name="mediaType" type="hidden" />
+                  <input name="mediaName" type="hidden" />
+                  <input class="visually-hidden" data-update-media type="file" accept="image/*,video/*" />
+                  <button class="btn ghost" type="button" data-open-update-media>Choose Gallery</button>
+                  <button class="btn ghost" type="button" data-clear-update-media>Remove</button>
+                </div>
+              </div>
+            </fieldset>
+            <button class="btn primary wide" type="submit">Post Update</button>
+          </form>
+        </section>
+      ` : ""}
+      <section class="panel">
+        <div class="section-title">
+          <h3>Latest updates</h3>
+          <span class="role-pill">${data.updates.length} posts</span>
+        </div>
+        <div class="updates-feed">${sortedUpdates().map(updateCard).join("") || empty("No mentor updates yet. Mentor posts will appear here for students.")}</div>
+      </section>
+    </div>
+  `;
+
+  const form = document.getElementById("updateForm");
+  if (form) {
+    setupUpdateMediaPicker(form);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const formData = new FormData(event.currentTarget);
+      data.updates.push({
+        id: uid("u"),
+        mentorId: currentUser.id,
+        category: formData.get("category"),
+        title: formData.get("title").trim(),
+        body: formData.get("body").trim(),
+        link: formData.get("link").trim(),
+        media: formData.get("mediaData") ? {
+          data: formData.get("mediaData"),
+          type: formData.get("mediaType"),
+          name: formData.get("mediaName"),
+        } : null,
+        likes: [],
+        comments: [],
+        createdAt: new Date().toISOString(),
+      });
+      saveData();
+      render();
+    });
+  }
+
+  document.querySelectorAll("[data-like-update]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const update = data.updates.find((item) => item.id === button.dataset.likeUpdate);
+      if (!update) return;
+      update.likes = update.likes || [];
+      if (update.likes.includes(currentUser.id)) {
+        update.likes = update.likes.filter((id) => id !== currentUser.id);
+      } else {
+        update.likes.push(currentUser.id);
+      }
+      saveData();
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-comment-form]").forEach((formElement) => {
+    formElement.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const update = data.updates.find((item) => item.id === formElement.dataset.commentForm);
+      if (!update) return;
+      const formData = new FormData(formElement);
+      const text = formData.get("comment").trim();
+      if (!text) return;
+      update.comments = update.comments || [];
+      update.comments.push({
+        id: uid("c"),
+        userId: currentUser.id,
+        text,
+        createdAt: new Date().toISOString(),
+      });
+      saveData();
+      render();
+    });
+  });
+}
+
+function setupUpdateMediaPicker(form) {
+  const hiddenData = form.querySelector("input[name='mediaData']");
+  const hiddenType = form.querySelector("input[name='mediaType']");
+  const hiddenName = form.querySelector("input[name='mediaName']");
+  const picker = form.querySelector("[data-update-media]");
+  const openButton = form.querySelector("[data-open-update-media]");
+  const clearButton = form.querySelector("[data-clear-update-media]");
+  const preview = form.querySelector("[data-update-media-preview]");
+
+  const updatePreview = (media) => {
+    hiddenData.value = media?.data || "";
+    hiddenType.value = media?.type || "";
+    hiddenName.value = media?.name || "";
+    preview.classList.toggle("has-media", Boolean(media?.data));
+    if (!media?.data) {
+      preview.innerHTML = "No media selected";
+      return;
+    }
+    preview.innerHTML = media.type === "video"
+      ? `<video src="${media.data}" controls muted></video>`
+      : `<img src="${media.data}" alt="${esc(media.name || "Selected update media")}" />`;
+  };
+
+  openButton.addEventListener("click", () => picker.click());
+  clearButton.addEventListener("click", () => updatePreview(null));
+  picker.addEventListener("change", () => {
+    readMediaFile(picker.files[0], updatePreview);
+    picker.value = "";
+  });
+}
+
+function updateCard(update) {
+  const mentor = getUser(update.mentorId);
+  const likes = update.likes || [];
+  const comments = update.comments || [];
+  const liked = likes.includes(currentUser.id);
+  const canReact = currentUser.role === "student";
+
+  return `
+    <article class="update-card">
+      <div class="update-head">
+        <div class="update-author">
+          ${avatarHtml(mentor)}
+          <div>
+            <span class="eyebrow">${esc(update.category || "Update")}</span>
+            <h3>${esc(update.title)}</h3>
+            <p>${esc(mentor?.name || "Mentor")} ${mentor?.organization ? `at ${esc(mentor.organization)}` : ""}</p>
+          </div>
+        </div>
+        <small>${new Date(update.createdAt).toLocaleDateString()}</small>
+      </div>
+      <p class="update-body">${esc(update.body)}</p>
+      ${update.media?.data ? updateMediaHtml(update.media) : ""}
+      ${update.link ? `<a class="update-link" href="${esc(update.link)}" target="_blank" rel="noreferrer">Open related link</a>` : ""}
+      <div class="update-actions">
+        ${canReact ? `<button class="btn ghost ${liked ? "liked" : ""}" type="button" data-like-update="${update.id}">${liked ? "Liked" : "Like"} (${likes.length})</button>` : `<span>${likes.length} likes</span>`}
+        <span>${comments.length} comments</span>
+      </div>
+      <div class="comment-list">${comments.map(commentItem).join("") || `<p class="comment-empty">No comments yet.</p>`}</div>
+      ${canReact ? `
+        <form class="comment-form" data-comment-form="${update.id}">
+          <input name="comment" placeholder="Add a comment..." required />
+          <button class="btn primary" type="submit">Comment</button>
+        </form>
+      ` : ""}
+    </article>
+  `;
+}
+
+function updateMediaHtml(media) {
+  if (media.type === "video") {
+    return `<video class="update-media" src="${media.data}" controls></video>`;
+  }
+  return `<img class="update-media" src="${media.data}" alt="${esc(media.name || "Update media")}" />`;
+}
+
+function commentItem(comment) {
+  const author = getUser(comment.userId);
+  return `
+    <div class="comment-item">
+      ${avatarHtml(author, "small")}
+      <div>
+        <strong>${esc(author?.name || "Student")}</strong>
+        <p>${esc(comment.text)}</p>
+      </div>
+    </div>
   `;
 }
 
